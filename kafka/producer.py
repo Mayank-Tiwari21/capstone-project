@@ -10,7 +10,7 @@ producer = KafkaProducer(
 )
 
 # Load message data from JSON file
-with open("./messages/messages.json", "r") as file:
+with open("s3://poc-bootcamp-capstone-project-group2/silver/messages/", "r") as file:
     messages = json.load(file)
 
 # Kafka topic name
