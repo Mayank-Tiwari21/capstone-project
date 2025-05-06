@@ -1,110 +1,83 @@
 import sys
-import boto3
-from datetime import datetime
-from pyspark.context import SparkContext
-from pyspark.sql import SparkSession, Window
-from pyspark.sql.functions import (
-    col, lit, current_timestamp, row_number, when, sum, year, month, dayofweek
-)
-from awsglue.context import GlueContext
+from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql.types import StructType, StructField, StringType, DateType
+from pyspark.sql.functions import *
+from pyspark.sql.types import DateType, StructType, StructField, StringType, TimestampType
+from datetime import datetime
 
-# Get job arguments
+# Initialize Glue job
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-
-# Initialize Spark and Glue contexts
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-# S3 paths
-bucket_name = "poc-bootcamp-capstone-project-group2"
-bronze_path = f"s3://{bucket_name}/bronze/employee_leave_data/"
-gold_path = f"s3://{bucket_name}/gold/employee_leave_data/"
-emp_time_data_path = f"s3://{bucket_name}/gold/employee_timeframe_output/status=ACTIVE/"
-holiday_calendar_path = f"s3://{bucket_name}/silver/employee_leave_calendar/"
+# PostgreSQL connection details
+pg_url = "jdbc:postgresql://54.165.21.137:5432/capstone_project2"
+pg_properties = {
+    "user": "postgres",
+    "password": "8308",
+    "driver": "org.postgresql.Driver"
+}
+pg_table2 = "employee_upcoming_leaves_count_final_table"
 
-# Define schema
-leave_schema = StructType([
-    StructField("emp_id", StringType(), True),
-    StructField("date", DateType(), True),
-    StructField("status", StringType(), True)
-])
+# ==== Read data ====
+calendar_df = spark.read.parquet("s3://poc-bootcamp-capstone-project-group2/silver/employee_leave_calendar/")
+leave_df = spark.read.parquet("s3://poc-bootcamp-capstone-project-group2/gold/employee_leave_data/")
 
-# Read today's leave data
-today_df = spark.read.schema(leave_schema).option("header", True).csv(bronze_path)
+# ==== Date preparation ====
+today = datetime.strptime("2024-05-01", "%Y-%m-%d").date()
+today_str = today.strftime('%Y-%m-%d')
+end_of_year_str = f"{today.year}-12-31"
 
-# Remove weekends (1 = Sunday, 7 = Saturday)
-today_df = today_df.filter(~dayofweek(col("date")).isin([1, 7]))
+# Clean and cast date columns
+calendar_df = calendar_df.withColumn("date", col("date").cast(DateType())).filter(col("date").isNotNull())
+leave_df = leave_df.withColumn("leave_date", col("date").cast(DateType())).filter(col("date").isNotNull())
 
-# Load holiday calendar and filter out matching leave records
-holiday_df = spark.read.option("header", True).parquet(holiday_calendar_path)
-holiday_df = holiday_df.select("date").distinct()
+# Generate working day range
+date_range = spark.sql(f"SELECT explode(sequence(to_date('{today_str}'), to_date('{end_of_year_str}'))) AS date")
+weekends = date_range.withColumn("day_of_week", dayofweek("date")) \
+                     .filter(col("day_of_week").isin([1, 7])) \
+                     .select("date")
 
-# Remove employee leave dates that match holiday dates
-today_df = today_df.join(holiday_df, on="date", how="left_anti")
+non_working_days = calendar_df.select("date").union(weekends).distinct()
+working_days = date_range.join(non_working_days, on="date", how="left_anti")
 
-# Read active employees
-emp_time_df = spark.read.parquet(emp_time_data_path)
+total_working_days = working_days.count()
+print(f"Total working days from {today_str} to {end_of_year_str}: {total_working_days}")
 
-# Keep only ACTIVE employees
-today_df = today_df.join(emp_time_df, "emp_id", 'left_semi')
+# ==== Leave filtering and analysis ====
+future_leaves = leave_df \
+    .filter((col("leave_date") >= lit(today_str)) & (col("leave_date") < lit(end_of_year_str))) \
+    .dropDuplicates(["emp_id", "leave_date"]) \
+    .join(working_days, leave_df.leave_date == working_days.date, "inner") \
+    .select("emp_id", "leave_date")
 
-# Add ingestion metadata
-today_date = datetime.utcnow().strftime('%Y-%m-%d')
-today_df = today_df.withColumn("ingest_date", lit(today_date)) \
-                   .withColumn("ingest_timestamp", current_timestamp())
+leave_counts = future_leaves.groupBy("emp_id") \
+    .agg(countDistinct("leave_date").alias("upcoming_leaves_count"))
 
-# Combine with historical data if exists
-try:
-    historical_df = spark.read.parquet(gold_path)
-    combined_df = historical_df.unionByName(today_df)
-    print("✅  gold data found and combined.")
-except Exception:
-    print("ℹ️ No existing gold data found.")
-    combined_df = today_df
-
-# Count status per employee and date
-status_count_df = combined_df.withColumn(
-    "is_cancelled", when(col("status") == "CANCELLED", 1).otherwise(0)
+flagged = leave_counts.withColumn(
+    "leave_percent", (col("upcoming_leaves_count") / lit(total_working_days)) * 100
 ).withColumn(
-    "is_active", when(col("status") == "ACTIVE", 1).otherwise(0)
-).groupBy("emp_id", "date").agg(
-    sum("is_cancelled").alias("cancelled_count"),
-    sum("is_active").alias("active_count")
+    "flagged", when(col("leave_percent") > 8, "Yes").otherwise("No")
 )
 
-# Decide final status
-final_status_df = status_count_df.withColumn(
-    "final_status",
-    when(col("cancelled_count") >= col("active_count"), lit("CANCELLED")).otherwise(lit("ACTIVE"))
-)
+# ==== Final flagged info ====
+final_flagged_leave_info = flagged.filter(col("flagged") == "Yes") \
+    .select("emp_id", "upcoming_leaves_count") \
+    .withColumn("run_date", lit(today_str))
 
-# Filter rows that match final status
-filtered_df = combined_df.join(
-    final_status_df.select("emp_id", "date", "final_status"),
-    on=["emp_id", "date"]
-).filter(
-    col("status") == col("final_status")
-)
+# ==== Write to S3 (Parquet) ====
+final_flagged_leave_info.write.mode("overwrite").partitionBy("run_date") \
+    .parquet("s3://poc-bootcamp-capstone-project-group2/gold/employee_leaves_count_info/")
 
-# Deduplicate using latest timestamp
-window_spec = Window.partitionBy("emp_id", "date").orderBy(col("ingest_timestamp").desc())
+# ==== Write to PostgreSQL ====
+final_flagged_leave_info.write \
+    .jdbc(pg_url, table=pg_table2, mode="overwrite", properties=pg_properties)
 
-deduped_df = filtered_df.withColumn("row_num", row_number().over(window_spec)) \
-                        .filter(col("row_num") == 1) \
-                        .drop("row_num", "final_status")
-
-# Add partition columns
-deduped_df = deduped_df.withColumn("year", year(col("date"))) \
-                       .withColumn("month", month(col("date")))
-
-# Write to Silver Layer
-deduped_df.write.mode("overwrite").partitionBy("year", "month").parquet(gold_path)
-
-# Commit job
+# ==== Complete Job ====
 job.commit()

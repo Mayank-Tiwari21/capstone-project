@@ -5,7 +5,7 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql.functions import *
-from pyspark.sql.types import DateType
+from pyspark.sql.types import DateType , StructType , StructField
 from datetime import datetime
 
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
@@ -21,27 +21,23 @@ pg_properties = {
     "password": "8308",
     "driver": "org.postgresql.Driver"
 }
-pg_table1 = "employee_active_emp_by_desg_final_table" 
 pg_table2 = "employee_upcoming_leaves_count_final_table"
 
 # ====================== Part 1: Active Employees by Designation ======================
-time_df = spark.read.parquet('s3://poc-bootcamp-capstone-project-group2/gold/employee_timeframe_output/')
-
-active_df = spark.read.parquet('s3://poc-bootcamp-capstone-project-group2/gold/employee_timeframe_output/status=ACTIVE/')
-
-active_count_df = active_df.groupBy("designation").agg(count(col("emp_id")).alias("active_employees"))
-designation_df = time_df.select("designation").distinct()
-
-final_cnt_df = designation_df.join(active_count_df, on="designation", how="left").fillna({"active_employees": 0})
-
-today_str = datetime.utcnow().strftime("%Y-%m-%d")
-final_cnt_df.withColumn("run_date", lit(today_str)) \
-    .write.mode('overwrite').partitionBy("run_date") \
-    .parquet('s3://poc-bootcamp-capstone-project-group2/gold/active_emp_by_desg/')
-
-final_cnt_df.write \
-        .jdbc(pg_url, table=pg_table1, mode="append", properties=pg_properties)
+# SEPERATE JOB 
 # ====================== Part 2: 8% Leave Monitoring ======================
+schema = StructType([
+    StructField("reason", StringType(), True),
+    StructField("date", TimestampType(), True),
+    StructField("year", DateType(), True),
+])
+
+
+leave_schema = StructType([
+    StructField("emp_id", StringType(), True),
+    StructField("date", DateType(), True),
+    StructField("status", StringType(), True)
+])
 
 calendar_df = spark.read.parquet("s3://poc-bootcamp-capstone-project-group2/silver/employee_leave_calendar/")
 leave_df = spark.read.parquet('s3://poc-bootcamp-capstone-project-group2/gold/employee_leave_data/')
@@ -49,6 +45,7 @@ leave_df = spark.read.parquet('s3://poc-bootcamp-capstone-project-group2/gold/em
 calendar_df = calendar_df.withColumn("date", col("date").cast(DateType())).filter(col("date").isNotNull())
 leave_df = leave_df.withColumn("leave_date", col("date").cast(DateType())).filter(col("date").isNotNull())
 
+#this is hardcoded date --for check
 today = datetime.strptime("2024-05-01", "%Y-%m-%d").date()
 current_date_str = today.strftime('%Y-%m-%d')
 end_of_year_str = f"{today.year}-12-31"
@@ -105,6 +102,6 @@ final_flagged_leave_info.write.mode("overwrite").partitionBy("run_date") \
     .parquet("s3://poc-bootcamp-capstone-project-group2/gold/employee_leaves_count_info/")
 
 final_flagged_leave_info.write \
-        .jdbc(pg_url, table=pg_table2, mode="append", properties=pg_properties)
+        .jdbc(pg_url, table=pg_table2, mode="overwrite", properties=pg_properties)
         
 job.commit()
