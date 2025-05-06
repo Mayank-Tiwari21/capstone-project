@@ -175,7 +175,7 @@ skip_yearly = EmptyOperator(
 # Dummy group task to wrap multiple yearly jobs
 run_yearly_group = EmptyOperator(
     task_id='run_yearly_group',
-    trigger_rule= TriggerRule.ALL_SUCCESS
+    trigger_rule= TriggerRule.ALL_SUCCESS,
     dag=dag_daily
 )
 

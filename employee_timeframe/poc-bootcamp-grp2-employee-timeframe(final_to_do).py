@@ -46,13 +46,13 @@ else :
     w1 = Window.partitionBy("emp_id", "start_date", "end_date").orderBy(col("salary").desc())
     df = df.withColumn("rn", row_number().over(w1)).filter(col("rn") == 1).drop("rn")
 
-      w2 = Window.partitionBy("emp_id").orderBy("start_date")
+    w2 = Window.partitionBy("emp_id").orderBy("start_date")
       
     # df = df.withColumn("next_start_date", lead("start_date").over(w2)) \
     #       .withColumn("end_date", when(col("end_date").isNull(), col("next_start_date")).otherwise(col("end_date"))) \
     # .drop("next_start_date")
     
-      df = df.withColumn('next_start_date',lead("start_date").over(w2))\
+    df = df.withColumn('next_start_date',lead("start_date").over(w2))\
             .withColumn("end_date",col("next_start_date"))\
                    .drop("next_start_date")
     
