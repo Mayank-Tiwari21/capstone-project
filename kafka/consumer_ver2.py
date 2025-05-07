@@ -146,7 +146,7 @@ def process_batch(batch_df, batch_id):
     # Step 2: Filter flagged messages within last month
     one_month_ago = datetime.utcnow() - timedelta(days=30)
     one_month_ago_str = one_month_ago.strftime('%Y-%m-%d %H:%M:%S')
-    flagged_df = flagged_df.filter(col("start_date") >= lit(one_month_ago_str))
+    flagged_df = flagged_df.filter(col("start_date") >= lit(one_month_ago_str)) # can be removed
     
     #Step 3: Get unique employee IDs in current batch
     emp_ids = [row["employee_id"] for row in flagged_df.select("employee_id").distinct().collect()]
@@ -178,7 +178,7 @@ def process_batch(batch_df, batch_id):
         .filter(col("start_date") >= lit(one_month_ago_str))
 
     #Step 6:count the valid flags for today
-    flag_count_df = combined_df.groupBy("employee_id").count().withColumnRenamed("count", "strike_count")
+    flag_count_df = combined_df.groupBy("employee_id").count().withColumnRenamed("count", "strike_count") #update count to .agg( count("*").alias(" "))
 
     # Step 7.1:--- Read only relevant strikes
     strikes_query = f"""
@@ -259,7 +259,7 @@ def process_batch(batch_df, batch_id):
         SET STATUS = 'INACTIVE'
         WHERE emp_id = ANY(%s)
     """, (striked_out_ids,))
-
+        
         
     # #if updated_df  not null
     # if updated is not None:

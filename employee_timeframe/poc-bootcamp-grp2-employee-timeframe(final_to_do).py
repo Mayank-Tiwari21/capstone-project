@@ -8,7 +8,7 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from pyspark.sql import Window
 from pyspark.sql.functions import (
-    col, to_date, from_unixtime, when, row_number, lit, lead
+    col, to_date, from_unixtime, when, row_number, lit, lead, current_date
 )
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
 
@@ -16,14 +16,37 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, L
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+
+
 # Fetch resolved arguments
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
 # Initialize the Job with the correct parameters
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)  # Pass args here correctly
+
+
 bucket = "poc-bootcamp-capstone-project-group2"
 input_path = f"s3://{bucket}/bronze/employee-timeframe-opt/"
 output_path = f"s3://{bucket}/gold/employee-timeframe-opt/"
+
+pg_host = "54.165.21.137"
+pg_port = "5432"
+pg_user = "postgres"
+pg_password = "8308"
+pg_dbname = "capstone_project2"
+pg_staging_table = "employee_timeframe_final_table_staging"
+pg_target_table = "employee_timeframe_final_table"
+striked_out_table = "striked_out"
+# JDBC URL
+jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_dbname}"
+
+# JDBC properties
+pg_properties = {
+    "user": pg_user,
+    "password": pg_password,
+    "driver": "org.postgresql.Driver"
+}
 
 # Schema
 schema = StructType([
@@ -39,7 +62,10 @@ df = spark.read.option("header", "true").schema(schema).csv(input_path)
 if df.rdd.isEmpty():
     print("NO INPUT DATA FOUND")
 else :
-        
+    striked_df = spark.read.jdbc(url=jdbc_url, table=striked_out_table, properties=pg_properties)
+    
+    
+    df = df.join(striked_df, on=(df["emp_id"] == striked_df["employee_id"]), how="left_anti")
     df = df.withColumn("start_date", to_date(from_unixtime(col("start_date").cast(DoubleType())))) \
            .withColumn("end_date", to_date(from_unixtime(col("end_date").cast(DoubleType()))))
     
@@ -47,10 +73,6 @@ else :
     df = df.withColumn("rn", row_number().over(w1)).filter(col("rn") == 1).drop("rn")
 
     w2 = Window.partitionBy("emp_id").orderBy("start_date")
-      
-    # df = df.withColumn("next_start_date", lead("start_date").over(w2)) \
-    #       .withColumn("end_date", when(col("end_date").isNull(), col("next_start_date")).otherwise(col("end_date"))) \
-    # .drop("next_start_date")
     
     df = df.withColumn('next_start_date',lead("start_date").over(w2))\
             .withColumn("end_date",col("next_start_date"))\
@@ -83,6 +105,12 @@ else :
     final_df = combined.withColumn("rn", row_number().over(w3)).filter(col("rn") == 1).drop("rn")
     
     # Write to Gold S3 (Parquet)
+    final_df = final_df.join(striked_df.select("employee_id").distinct(), on=(striked_df["employee_id"] == final_df["emp_id"]), how="left") \
+    .withColumn("status", when((col("status") == "ACTIVE") & (col("employee_id").isNotNull()), "INACTIVE")
+                .otherwise(col("status"))) \
+    .withColumn("end_date", when((col("status") == "INACTIVE") & (col("emp_id").isNotNull()), current_date())
+                .otherwise(col("end_date")))
+    
     final_df.write.mode("overwrite").partitionBy("status").parquet(output_path)
     
     print(" Written to Gold Layer.")
@@ -94,23 +122,6 @@ else :
     from pyspark.sql.types import LongType
     
     # PostgreSQL Connection Settings
-    pg_host = "54.165.21.137"
-    pg_port = "5432"
-    pg_user = "postgres"
-    pg_password = "8308"
-    pg_dbname = "capstone_project2"
-    pg_staging_table = "employee_timeframe_final_table_staging"
-    pg_target_table = "employee_timeframe_final_table"
-    
-    # JDBC URL
-    jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_dbname}"
-    
-    # JDBC properties
-    pg_properties = {
-        "user": pg_user,
-        "password": pg_password,
-        "driver": "org.postgresql.Driver"
-    }
     
     # Cast emp_id to match PostgreSQL bigint
     final_df = final_df.withColumn("emp_id", col("emp_id").cast(LongType()))
@@ -143,5 +154,5 @@ else :
     # Overwrite the final target table
     upsert_df.write.mode("overwrite").jdbc(url=jdbc_url, table=pg_target_table, properties=pg_properties)
     
-    print("✅ PostgreSQL UPSERT completed.")
+    print("PostgreSQL UPSERT completed.")
 job.commit()    

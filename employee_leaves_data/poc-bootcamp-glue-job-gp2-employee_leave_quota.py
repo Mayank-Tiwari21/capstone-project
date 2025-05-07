@@ -37,7 +37,7 @@ schema = StructType([
 # Read CSV directly with schema
 df = spark.read.option("header", True).schema(schema).csv(INPUT_PATH)
 if df.rdd.isEmpty():
-    print("⚠️ No data found in input. Skipping processing and write steps.")
+    print(" No data found in input. Skipping processing and write steps.")
 else:
     
     # Drop duplicates
