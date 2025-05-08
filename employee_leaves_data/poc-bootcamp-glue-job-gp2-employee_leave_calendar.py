@@ -42,7 +42,7 @@ schema = StructType([
 # Read the data from the bronze bucket
 employee_leave_df = spark.read.format("csv").schema(schema).load(bronze_bucket)
 if employee_leave_df.rdd.isEmpty():
-    print("⚠️ No data found in input. Skipping processing and write steps.")
+    print("No data found in input. Skipping processing and write steps.")
 else :
         
     # Drop duplicate records

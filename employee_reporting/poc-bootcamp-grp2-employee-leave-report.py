@@ -25,20 +25,6 @@ pg_properties = {
 }
 pg_table2 = "employee_upcoming_leaves_count_final_table"
 
-# # Define schema
-# leave_schema = StructType([
-#     StructField("emp_id", StringType(), True),
-#     StructField("date", DateType(), True),
-#     StructField("status", StringType(), True)
-# ])
-
-# calendar_schema = StructType([
-#     StructField("reason", StringType(), True),
-#     StructField("date", TimestampType(), True)
-# ])
-
-
-
 
 # ==== Read data ====
 calendar_df = spark.read.parquet("s3://poc-bootcamp-capstone-project-group2/silver/employee_leave_calendar/")

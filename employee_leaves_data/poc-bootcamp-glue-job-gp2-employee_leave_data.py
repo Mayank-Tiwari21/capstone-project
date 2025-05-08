@@ -25,7 +25,7 @@ job.init(args['JOB_NAME'], args)
 bucket_name = "poc-bootcamp-capstone-project-group2"
 bronze_path = f"s3://{bucket_name}/bronze/employee_leave_data/"
 gold_path = f"s3://{bucket_name}/gold/employee_leave_data/"
-emp_time_data_path = f"s3://{bucket_name}/gold/employee_timeframe_output/status=ACTIVE/"
+emp_time_data_path = f"s3://{bucket_name}/gold/employee-timeframe-opt/status=ACTIVE/"
 holiday_calendar_path = f"s3://{bucket_name}/silver/employee_leave_calendar/"
 
 # Define schema
@@ -68,8 +68,6 @@ except Exception:
     print("No existing GOld data found.")
     combined_df = today_df
 
-
-
 # Count status per employee and date
 status_count_df = combined_df.withColumn(
     "is_cancelled", when(col("status") == "CANCELLED", lit(1)).otherwise(lit(0))
@@ -105,8 +103,19 @@ deduped_df = filtered_df.withColumn("row_num", row_number().over(window_spec)) \
 deduped_df = deduped_df.withColumn("year", year(col("date"))) \
                        .withColumn("month", month(col("date")))
 
-# Write to Silver Layer
+# Write to Silver Layer (Gold path in your naming)
 deduped_df.write.mode("overwrite").partitionBy("year", "month").parquet(gold_path)
+
+# --- Write to PostgreSQL on EC2 ---
+postgres_url = "jdbc:postgresql://54.165.21.137:5432/capstone_project2"
+postgres_properties = {
+    "user": "postgres",
+    "password": "8308",
+    "driver": "org.postgresql.Driver"
+}
+
+deduped_df.write \
+    .jdbc(url=postgres_url, table="employee_leave_data", mode="overwrite", properties=postgres_properties)
 
 # Commit job
 job.commit()

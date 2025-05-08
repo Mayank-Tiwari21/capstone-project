@@ -6,6 +6,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 import sys
 from pyspark.sql.functions import *
+from pyspark.sql.types import *
 # sys.path.insert(0, 's3://poc-bootcamp-capstone-project-group2/glue-libs/psycopg.zip')
 import psycopg2
 ## @params: [JOB_NAME]
@@ -18,16 +19,23 @@ job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
 #reading from the timeframe data
+# schema = StructType([
+#     StructField("emp_id", StringType(), True),
+#     StructField("designation", StringType(), True),
+#     StructField("start_date", LongType(), True),
+#     StructField("end_date", DoubleType(), True),
+#     StructField("salary", DoubleType(), True),
+#     StructField("status",StringType(),True)
+# ])
 employee_timeframe_df = spark.read.format("parquet").load("s3://poc-bootcamp-capstone-project-group2/gold/employee-timeframe-opt/status=ACTIVE/*")
 # filtering the employee ids from employee_timeframe data 
 emp_ids = [row["emp_id"] for row in employee_timeframe_df.select("emp_id").collect()]
 emp_id_list = ",".join(f"'{e}'" for e in emp_ids) 
 emp_id_filter = f"({emp_id_list})"
 
-
+print(emp_id_filter)
 #query to read from the employee_strikes
-query = f"""(select * from employee_strikes
-            where employee_id in {emp_id_filter}) as es"""
+query = f"(select * from employee_strikes where employee_id in {emp_id_filter}) as es"
             
 #reading employee_strikes
 employee_strikes_df = spark.read.format("jdbc")\

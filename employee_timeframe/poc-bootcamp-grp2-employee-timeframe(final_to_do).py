@@ -52,7 +52,7 @@ pg_properties = {
 schema = StructType([
     StructField("emp_id", StringType(), True),
     StructField("designation", StringType(), True),
-    StructField("start_date", LongType(), True),
+    StructField("start_date", DoubleType(), True),
     StructField("end_date", DoubleType(), True),
     StructField("salary", DoubleType(), True),
 ])
@@ -63,7 +63,6 @@ if df.rdd.isEmpty():
     print("NO INPUT DATA FOUND")
 else :
     striked_df = spark.read.jdbc(url=jdbc_url, table=striked_out_table, properties=pg_properties)
-    
     
     df = df.join(striked_df, on=(df["emp_id"] == striked_df["employee_id"]), how="left_anti")
     df = df.withColumn("start_date", to_date(from_unixtime(col("start_date").cast(DoubleType())))) \
@@ -88,6 +87,7 @@ else :
     
     # Left-anti join to get only new records
     existing_keys = existing_df.select("emp_id", "start_date", "end_date", "salary").dropDuplicates()
+    
     new_df = df.alias("new").join(
         existing_keys.alias("exist"),
         on=["emp_id", "start_date", "end_date", "salary"],
@@ -108,8 +108,10 @@ else :
     final_df = final_df.join(striked_df.select("employee_id").distinct(), on=(striked_df["employee_id"] == final_df["emp_id"]), how="left") \
     .withColumn("status", when((col("status") == "ACTIVE") & (col("employee_id").isNotNull()), "INACTIVE")
                 .otherwise(col("status"))) \
-    .withColumn("end_date", when((col("status") == "INACTIVE") & (col("emp_id").isNotNull()), current_date())
+    .withColumn("end_date", when((col("status") == "INACTIVE") & (col("employee_id").isNotNull()), current_date())
                 .otherwise(col("end_date")))
+    final_df =final_df.drop("employee_id")
+    
     
     final_df.write.mode("overwrite").partitionBy("status").parquet(output_path)
     

@@ -43,7 +43,7 @@ pg_table = "employee_data_final_table"
 schema = StructType([
     StructField("name", StringType(), True),
     StructField("age", IntegerType(), True),
-    StructField("emp_id", StringType(), True)
+    StructField("emp_id", LongType(), True)
 ])
 
 df = spark.read.schema(schema).option("header", "true").csv(input_path)
